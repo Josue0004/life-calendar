@@ -263,38 +263,69 @@ export default function Page() {
           <div className="flex items-center gap-2"><span className="inline-block h-3 w-3 rounded-sm bg-neutral-200 dark:bg-neutral-800" /> Future</div>
         </div>
 
-        <div className="mt-4 overflow-x-auto">
-          <div className="min-w-[760px] rounded-2xl border bg-white/60 dark:bg-neutral-900/60 backdrop-blur p-4">
-            <div className="grid grid-cols-[auto,1fr] gap-3">
-              <div className="flex flex-col gap-[6px] pt-[2px]">
-                {years.map((y, idx) => (
-                  <div key={y} className="h-3 text-[10px] text-neutral-500 dark:text-neutral-400 tabular-nums">{(idx%2===0)? y: ''}</div>
-                ))}
-              </div>
+        {/* Grid */}
+        <div className="mt-4">
+          <div className="w-full rounded-2xl border bg-white/60 dark:bg-neutral-900/60 backdrop-blur p-4">
+            <div className="flex flex-col">
+              {Array.from({ length: rows }).map((_, r) => {
+                const year = years[r];
+                const start = r * cols;
+                const end = start + cols;
+                const rowWeeks = weeksData.slice(start, end);
+                const isDecadeDivider = r > 0 && r % 10 === 0;
 
-              <div className="grid" style={{ gridTemplateColumns: `repeat(${cols}, minmax(10px, 1fr))`, rowGap: 6, columnGap: 6 }} role="grid" aria-label="Life weeks grid">
-                {weeksData.map((w) => {
-                  let cls = 'h-3 rounded-[3px] outline-none'
-                  if (w.status === 'past') cls += ' bg-neutral-900 dark:bg-neutral-100'
-                  else if (w.status === 'current') cls += ' bg-neutral-400 dark:bg-neutral-500 animate-pulse'
-                  else cls += ' bg-neutral-200 dark:bg-neutral-800'
-                  return (
-                    <button
-                      key={w.i}
-                      className={cls}
-                      onMouseMove={(e) => onCellMouseMove(e, w)}
-                      onMouseLeave={onCellLeave}
-                      onMouseEnter={(e) => onCellMouseMove(e, w)}
-                      onBlur={onCellLeave}
-                      title={`Week ${w.i+1}: ${w.start.toDateString()} → ${w.end.toDateString()}`}
-                      aria-label={`Week ${w.i+1} ${w.status}`}
-                    />
-                  )
-                })}
-              </div>
+                return (
+                  <React.Fragment key={r}>
+                    {/* Decade separator (slight visual break) */}
+                    {isDecadeDivider && (
+                      <div className="my-[6px] h-px bg-neutral-300/60 dark:bg-neutral-700/60" />
+                    )}
+
+                    {/* One row: year label + 52 week cells */}
+                    <div className="grid grid-cols-[auto,1fr] items-center gap-2">
+                      <div className="w-12 text-[10px] text-neutral-500 dark:text-neutral-400 tabular-nums">
+                        {year}
+                      </div>
+
+                      <div
+                        className="grid"
+                        style={{
+                          // 52 columns; slightly smaller cells for better fit
+                          gridTemplateColumns: `repeat(${cols}, minmax(8px, 1fr))`,
+                          columnGap: 6,
+                          rowGap: 0,
+                        }}
+                        role="row"
+                        aria-label={`Year ${year}`}
+                      >
+                        {rowWeeks.map((w) => {
+                          let cls = "h-3 rounded-[3px] outline-none";
+                          if (w.status === "past") cls += " bg-neutral-900 dark:bg-neutral-100";
+                          else if (w.status === "current") cls += " bg-neutral-400 dark:bg-neutral-500 animate-pulse";
+                          else cls += " bg-neutral-200 dark:bg-neutral-800";
+
+                          return (
+                            <button
+                              key={w.i}
+                              className={cls}
+                              onMouseMove={(e) => onCellMouseMove(e, w)}
+                              onMouseLeave={onCellLeave}
+                              onMouseEnter={(e) => onCellMouseMove(e, w)}
+                              onBlur={onCellLeave}
+                              title={`Week ${w.i + 1}: ${w.start.toDateString()} → ${w.end.toDateString()}`}
+                              aria-label={`Week ${w.i + 1} ${w.status}`}
+                            />
+                          );
+                        })}
+                      </div>
+                    </div>
+                  </React.Fragment>
+                );
+              })}
             </div>
           </div>
         </div>
+
 
         <div className="mt-6 text-xs text-neutral-500 dark:text-neutral-400 max-w-prose">
           Weeks are approximated with 52 columns/year. Calculations use local time and average year length (365.2425 days). Hover a square to see its date range. Use the URL params <code>?b=YYYY-MM-DD&e=85</code> to share.
