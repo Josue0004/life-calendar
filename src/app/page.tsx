@@ -1,4 +1,13 @@
+"use client";
+
 import React, { useEffect, useMemo, useRef, useState } from 'react'
+
+type WeekCell = {
+  i: number;
+  start: Date;
+  end: Date;
+  status: "past" | "current" | "future";
+};
 
 const fmt2 = (n: number) => n.toLocaleString(undefined)
 const clamp = (n: number, min: number, max: number) => Math.max(min, Math.min(max, n))
@@ -30,26 +39,39 @@ function useNow(tickMs = 1000) {
 }
 
 function useUrlState(defaultBirth: Date, defaultExpectancy: number) {
-  const [state, setState] = useState(() => {
-    const sp = new URLSearchParams(window.location.search)
-    const b = parseYMD(sp.get('b')) || defaultBirth
-    const e = Number(sp.get('e'))
-    const expectancy = Number.isFinite(e) ? clamp(Math.round(e), 40, 120) : defaultExpectancy
-    return { birth: b, expectancy }
-  })
+  // Initialize without touching `window`
+  const [state, setState] = useState(() => ({
+    birth: defaultBirth,
+    expectancy: defaultExpectancy,
+  }));
 
+  // On mount (client only), read from URL once
   useEffect(() => {
-    const sp = new URLSearchParams(window.location.search)
-    const b = state.birth
-    const e = String(state.expectancy)
-    sp.set('b', `${b.getFullYear()}-${String(b.getMonth()+1).padStart(2,'0')}-${String(b.getDate()).padStart(2,'0')}`)
-    sp.set('e', e)
-    const url = `${window.location.pathname}?${sp.toString()}`
-    window.history.replaceState(null, '', url)
-  }, [state.birth, state.expectancy])
+    if (typeof window === "undefined") return;
+    const sp = new URLSearchParams(window.location.search);
+    const b = parseYMD(sp.get("b"));
+    const e = Number(sp.get("e"));
+    setState((s) => ({
+      birth: b ?? s.birth,
+      expectancy: Number.isFinite(e) ? Math.max(40, Math.min(120, Math.round(e))) : s.expectancy,
+    }));
+  }, []);
 
-  return [state, setState] as const
+  // Keep URL in sync (client only)
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const sp = new URLSearchParams(window.location.search);
+    const b = state.birth;
+    const e = String(state.expectancy);
+    sp.set("b", `${b.getFullYear()}-${String(b.getMonth() + 1).padStart(2, "0")}-${String(b.getDate()).padStart(2, "0")}`);
+    sp.set("e", e);
+    const url = `${window.location.pathname}?${sp.toString()}`;
+    window.history.replaceState(null, "", url);
+  }, [state.birth, state.expectancy]);
+
+  return [state, setState] as const;
 }
+
 
 function StatCard({ label, value, sub }: { label: string, value: React.ReactNode, sub?: string }) {
   return (
@@ -96,19 +118,19 @@ export default function Page() {
   const [, setHoverTick] = useState(0)
 
   const weeksData = useMemo(() => {
-    const arr: { i: number, start: Date, end: Date, status: 'past'|'current'|'future' }[] = []
-    const firstWeekStart = startOfWeek(birth)
+    const arr: WeekCell[] = [];
+    const firstWeekStart = startOfWeek(birth);
     for (let i = 0; i < totalWeeks; i++) {
-      const start = new Date(firstWeekStart)
-      start.setDate(start.getDate() + i * 7)
-      const end = endOfWeek(start)
-      let status: 'past'|'current'|'future' = 'future'
-      if (i < currentWeekIndex) status = 'past'
-      else if (i === currentWeekIndex) status = 'current'
-      arr.push({ i, start, end, status })
+      const start = new Date(firstWeekStart);
+      start.setDate(start.getDate() + i * 7);
+      const end = endOfWeek(start);
+      let status: WeekCell["status"] = "future";
+      if (i < currentWeekIndex) status = "past";
+      else if (i === currentWeekIndex) status = "current";
+      arr.push({ i, start, end, status });
     }
-    return arr
-  }, [birth, totalWeeks, currentWeekIndex])
+    return arr;
+  }, [birth, totalWeeks, currentWeekIndex]);
 
   const years = useMemo(() => {
     const res: number[] = []
@@ -121,7 +143,9 @@ export default function Page() {
   const ageDays = Math.floor(diffInDays(birth, now))
   const ageHours = Math.floor((now.getTime() - birth.getTime()) / 3600000)
 
-  function onCellMouseMove(e: React.MouseEvent<HTMLButtonElement>, w: any) {
+  function onCellMouseMove(
+  e: React.MouseEvent<HTMLButtonElement>,
+  w: WeekCell) {
     hoverRef.current = {
       x: e.clientX,
       y: e.clientY,
@@ -139,8 +163,21 @@ export default function Page() {
   function onCellLeave() { hoverRef.current.show = false; setHoverTick((t) => t + 1) }
 
   // dark mode toggle
-  const [dark, setDark] = useState(() => window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches)
-  useEffect(() => { const root = document.documentElement; if (dark) root.classList.add('dark'); else root.classList.remove('dark') }, [dark])
+  const [dark, setDark] = useState(false);
+
+  useEffect(() => {
+    if (typeof window !== "undefined" && window.matchMedia) {
+      setDark(window.matchMedia("(prefers-color-scheme: dark)").matches);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (typeof document !== "undefined") {
+      const root = document.documentElement;
+      if (dark) root.classList.add("dark");
+      else root.classList.remove("dark");
+    }
+  }, [dark]);
 
   const [birthInput, setBirthInput] = useState(() => {
     const y = birth.getFullYear(); const m = String(birth.getMonth()+1).padStart(2, '0'); const d = String(birth.getDate()).padStart(2, '0')
