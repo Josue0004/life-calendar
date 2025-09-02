@@ -1,6 +1,18 @@
 "use client";
 
-import React, { useEffect, useMemo, useRef, useState } from 'react'
+import React, { useEffect, useMemo, useRef, useState } from "react";
+
+/** ====== CONSTANTS (fixed to your request) ====== */
+const BIRTH = new Date(2004, 4, 6, 8, 0, 0); // Year, Month(0=Jan, so 4=May), Day, 08:00 local
+const EXPECTANCY_YEARS = 88;
+const COLS = 52; // 52 week-columns per year
+const MS = {
+  sec: 1000,
+  min: 60_000,
+  hour: 3_600_000,
+  day: 86_400_000,
+  yearAvg: 365.2425 * 24 * 3_600_000,
+};
 
 type WeekCell = {
   i: number;
@@ -9,143 +21,115 @@ type WeekCell = {
   status: "past" | "current" | "future";
 };
 
-const fmt2 = (n: number) => n.toLocaleString(undefined)
-const clamp = (n: number, min: number, max: number) => Math.max(min, Math.min(max, n))
+const clamp = (n: number, min: number, max: number) => Math.max(min, Math.min(max, n));
+const fmt2 = (n: number) => n.toLocaleString(undefined);
 
-function parseYMD(s: string | null) {
-  const m = /^\d{4}-\d{2}-\d{2}$/.exec(s || '')
-  if (!m) return null
-  const [y, mo, d] = (s as string).split('-').map(Number)
-  const dt = new Date(y, mo - 1, d)
-  return Number.isNaN(dt.getTime()) ? null : dt
+function addDays(base: Date, days: number) {
+  const d = new Date(base);
+  d.setDate(d.getDate() + days);
+  return d;
 }
 
-function diffInDays(a: Date, b: Date) { return (b.getTime() - a.getTime()) / 86400000 }
-function diffInWeeks(a: Date, b: Date) { return diffInDays(a, b) / 7 }
-function ageInYears(birth: Date, now = new Date()) { return (now.getTime() - birth.getTime()) / (365.2425 * 24 * 3600 * 1000) }
-
-function startOfWeek(date: Date) {
-  const d = new Date(date.getFullYear(), date.getMonth(), date.getDate())
-  const day = (d.getDay() + 6) % 7 // Mon=0
-  d.setDate(d.getDate() - day)
-  return d
+function diffMs(a: Date, b: Date) {
+  return b.getTime() - a.getTime();
 }
-function endOfWeek(date: Date) { const s = startOfWeek(date); const e = new Date(s); e.setDate(e.getDate() + 6); return e }
 
 function useNow(tickMs = 1000) {
-  const [now, setNow] = useState(new Date())
-  useEffect(() => { const id = setInterval(() => setNow(new Date()), tickMs); return () => clearInterval(id) }, [tickMs])
-  return now
+  const [now, setNow] = useState(new Date());
+  useEffect(() => {
+    const id = setInterval(() => setNow(new Date()), tickMs);
+    return () => clearInterval(id);
+  }, [tickMs]);
+  return now;
 }
 
-function useUrlState(defaultBirth: Date, defaultExpectancy: number) {
-  // Initialize without touching `window`
-  const [state, setState] = useState(() => ({
-    birth: defaultBirth,
-    expectancy: defaultExpectancy,
-  }));
-
-  // On mount (client only), read from URL once
+/** Theme management (no SSR mismatch): default light, persist in localStorage */
+function useTheme() {
+  const [dark, setDark] = useState(false);
+  // Load stored preference on mount
   useEffect(() => {
-    if (typeof window === "undefined") return;
-    const sp = new URLSearchParams(window.location.search);
-    const b = parseYMD(sp.get("b"));
-    const e = Number(sp.get("e"));
-    setState((s) => ({
-      birth: b ?? s.birth,
-      expectancy: Number.isFinite(e) ? Math.max(40, Math.min(120, Math.round(e))) : s.expectancy,
-    }));
+    try {
+      const saved = typeof window !== "undefined" ? localStorage.getItem("theme") : null;
+      if (saved === "dark") setDark(true);
+      else if (saved === "light") setDark(false);
+      else {
+        // Fallback to OS preference if no saved theme
+        if (typeof window !== "undefined" && window.matchMedia) {
+          setDark(window.matchMedia("(prefers-color-scheme: dark)").matches);
+        }
+      }
+    } catch {}
   }, []);
-
-  // Keep URL in sync (client only)
+  // Apply & persist
   useEffect(() => {
-    if (typeof window === "undefined") return;
-    const sp = new URLSearchParams(window.location.search);
-    const b = state.birth;
-    const e = String(state.expectancy);
-    sp.set("b", `${b.getFullYear()}-${String(b.getMonth() + 1).padStart(2, "0")}-${String(b.getDate()).padStart(2, "0")}`);
-    sp.set("e", e);
-    const url = `${window.location.pathname}?${sp.toString()}`;
-    window.history.replaceState(null, "", url);
-  }, [state.birth, state.expectancy]);
-
-  return [state, setState] as const;
-}
-
-
-function StatCard({ label, value, sub }: { label: string, value: React.ReactNode, sub?: string }) {
-  return (
-    <div className="rounded-2xl border bg-white/60 dark:bg-neutral-900/60 backdrop-blur p-4 shadow-sm">
-      <div className="text-sm text-neutral-500 dark:text-neutral-400">{label}</div>
-      <div className="mt-1 text-2xl font-semibold leading-tight">{value}</div>
-      {sub && <div className="mt-1 text-xs text-neutral-500 dark:text-neutral-400">{sub}</div>}
-    </div>
-  )
-}
-
-function ProgressBar({ pct }: { pct: number }) {
-  const pctClamped = clamp(pct, 0, 100)
-  return (
-    <div className="w-full h-3 rounded-full bg-neutral-200 dark:bg-neutral-800 overflow-hidden">
-      <div className="h-full bg-black/80 dark:bg-white/90" style={{ width: `${pctClamped}%` }} aria-label={`Progress ${pctClamped.toFixed(2)}%`} />
-    </div>
-  )
-}
-
-function Tooltip({ x, y, children }: { x: number, y: number, children: React.ReactNode }) {
-  return (
-    <div className="pointer-events-none fixed z-50 max-w-xs rounded-xl border bg-white dark:bg-neutral-900 text-xs p-2 shadow-lg" style={{ left: x + 12, top: y + 12 }} role="tooltip">
-      {children}
-    </div>
-  )
+    if (typeof document !== "undefined") {
+      const root = document.documentElement;
+      if (dark) root.classList.add("dark");
+      else root.classList.remove("dark");
+      try {
+        localStorage.setItem("theme", dark ? "dark" : "light");
+      } catch {}
+    }
+  }, [dark]);
+  return { dark, setDark };
 }
 
 export default function Page() {
-  const now = useNow(1000)
-  const defaultBirth = new Date(new Date().getFullYear() - 20, 0, 1)
-  const [state, setState] = useUrlState(defaultBirth, 85)
-  const { birth, expectancy } = state
+  const now = useNow(1000);
+  const { dark, setDark } = useTheme();
 
-  const rows = expectancy
-  const cols = 52
-  const livedWeeks = Math.max(0, Math.floor(diffInWeeks(birth, now)))
-  const totalWeeks = Math.round(expectancy * cols)
-  const remainingWeeks = Math.max(0, totalWeeks - livedWeeks)
-  const pctLived = (livedWeeks / totalWeeks) * 100
-  const currentWeekIndex = livedWeeks
+  /** ====== CORE LIFE MATH (exact from birth moment) ====== */
+  const totalWeeks = EXPECTANCY_YEARS * COLS;
+  const livedWeeks = Math.max(0, Math.floor(diffMs(BIRTH, now) / (7 * MS.day)));
+  const remainingWeeks = Math.max(0, totalWeeks - livedWeeks);
+  const pctLived = (livedWeeks / totalWeeks) * 100;
 
-  const hoverRef = useRef<{ x: number, y: number, show: boolean, content: React.ReactNode | null}>({ x:0, y:0, show:false, content:null })
-  const [, setHoverTick] = useState(0)
+  /** Age breakdown to seconds (live): */
+  const delta = diffMs(BIRTH, now);
+  const yearsExact = delta / MS.yearAvg;
+  const ageDays = Math.floor(delta / MS.day);
+  const ageHours = Math.floor(delta / MS.hour);
+  // For the detailed ticking display:
+  const totalSeconds = Math.floor(delta / MS.sec);
+  const seconds = totalSeconds % 60;
+  const totalMinutes = Math.floor(totalSeconds / 60);
+  const minutes = totalMinutes % 60;
+  const totalHours = Math.floor(totalMinutes / 60);
+  const hours = totalHours % 24;
+  const days = Math.floor(totalHours / 24);
+  // We’ll show yearsExact with precision and also the ticking D:H:M:S since birth.
 
-  const weeksData = useMemo(() => {
+  /** Week cells exactly from birth moment (no “start of week Monday” drift) */
+  const weeksData = useMemo<WeekCell[]>(() => {
     const arr: WeekCell[] = [];
-    const firstWeekStart = startOfWeek(birth);
     for (let i = 0; i < totalWeeks; i++) {
-      const start = new Date(firstWeekStart);
-      start.setDate(start.getDate() + i * 7);
-      const end = endOfWeek(start);
+      const start = addDays(BIRTH, i * 7);
+      const end = addDays(start, 6);
       let status: WeekCell["status"] = "future";
-      if (i < currentWeekIndex) status = "past";
-      else if (i === currentWeekIndex) status = "current";
+      if (i < livedWeeks) status = "past";
+      else if (i === livedWeeks) status = "current";
       arr.push({ i, start, end, status });
     }
     return arr;
-  }, [birth, totalWeeks, currentWeekIndex]);
+  }, [totalWeeks, livedWeeks]);
 
+  /** Years to render (one row per expected year) */
   const years = useMemo(() => {
-    const res: number[] = []
-    for (let r = 0; r < rows; r++) res.push(birth.getFullYear() + r)
-    return res
-  }, [birth, rows])
+    const out: number[] = [];
+    for (let r = 0; r < EXPECTANCY_YEARS; r++) out.push(BIRTH.getFullYear() + r);
+    return out;
+  }, []);
 
-  const ageYearsExact = ageInYears(birth, now)
-  const ageYearsInt = Math.floor(ageYearsExact)
-  const ageDays = Math.floor(diffInDays(birth, now))
-  const ageHours = Math.floor((now.getTime() - birth.getTime()) / 3600000)
+  /** Tooltip state (mouse-positioned) */
+  const hoverRef = useRef<{ x: number; y: number; show: boolean; content: React.ReactNode | null }>({
+    x: 0,
+    y: 0,
+    show: false,
+    content: null,
+  });
+  const [, setHoverTick] = useState(0);
 
-  function onCellMouseMove(
-  e: React.MouseEvent<HTMLButtonElement>,
-  w: WeekCell) {
+  function onCellMouseMove(e: React.MouseEvent<HTMLButtonElement>, w: WeekCell) {
     hoverRef.current = {
       x: e.clientX,
       y: e.clientY,
@@ -153,57 +137,31 @@ export default function Page() {
       content: (
         <div>
           <div className="font-medium">Week {w.i + 1}</div>
-          <div className="text-neutral-600 dark:text-neutral-300">{w.start.toDateString()} <span className="px-1">→</span> {w.end.toDateString()}</div>
+          <div className="text-neutral-600 dark:text-neutral-300">
+            {w.start.toDateString()} <span className="px-1">→</span> {w.end.toDateString()}
+          </div>
           <div className="mt-1 text-[11px] uppercase tracking-wide">{w.status}</div>
         </div>
-      )
-    }
-    setHoverTick((t) => t + 1)
+      ),
+    };
+    setHoverTick((t) => t + 1);
   }
-  function onCellLeave() { hoverRef.current.show = false; setHoverTick((t) => t + 1) }
-
-  // dark mode toggle
-  const [dark, setDark] = useState(false);
-
-  useEffect(() => {
-    if (typeof window !== "undefined" && window.matchMedia) {
-      setDark(window.matchMedia("(prefers-color-scheme: dark)").matches);
-    }
-  }, []);
-
-  useEffect(() => {
-    if (typeof document !== "undefined") {
-      const root = document.documentElement;
-      if (dark) root.classList.add("dark");
-      else root.classList.remove("dark");
-    }
-  }, [dark]);
-
-  const [birthInput, setBirthInput] = useState(() => {
-    const y = birth.getFullYear(); const m = String(birth.getMonth()+1).padStart(2, '0'); const d = String(birth.getDate()).padStart(2, '0')
-    return `${y}-${m}-${d}`
-  })
-  useEffect(() => {
-    setBirthInput(() => {
-      const y = birth.getFullYear(); const m = String(birth.getMonth()+1).padStart(2, '0'); const d = String(birth.getDate()).padStart(2, '0')
-      return `${y}-${m}-${d}`
-    })
-  }, [birth])
-
-  function applyBirthInput() {
-    const parsed = parseYMD(birthInput)
-    if (parsed) setState((s) => ({ ...s, birth: parsed }))
+  function onCellLeave() {
+    hoverRef.current.show = false;
+    setHoverTick((t) => t + 1);
   }
-  function setExpectancyVal(e: number) { setState((s) => ({ ...s, expectancy: clamp(Math.round(e), 40, 120) })) }
-  const quicks = [75, 80, 85, 90, 100]
 
   return (
-    <div className="min-h-screen w-full">
+    <div className="min-h-screen w-full bg-neutral-50 text-neutral-900 dark:bg-neutral-950 dark:text-neutral-100">
       <div className="mx-auto max-w-7xl px-4 py-6 sm:py-10">
+        {/* Header */}
         <div className="flex items-start sm:items-center justify-between gap-4">
           <div>
             <h1 className="text-2xl sm:text-3xl font-bold tracking-tight">Life Calendar</h1>
-            <p className="text-neutral-600 dark:text-neutral-300 mt-1 max-w-prose">A week-by-week view of your life — past, present, and (probable) future. Set your birthdate and expected lifespan.</p>
+            <p className="text-neutral-600 dark:text-neutral-300 mt-1 max-w-prose">
+              Fixed birth: <span className="font-medium">May 6, 2004, 08:00</span> • Life expectancy:{" "}
+              <span className="font-medium">{EXPECTANCY_YEARS} years</span>.
+            </p>
           </div>
           <div className="flex items-center gap-2">
             <button
@@ -211,87 +169,85 @@ export default function Page() {
               onClick={() => setDark((d) => !d)}
               aria-label="Toggle dark mode"
             >
-              {dark ? '☀️ Light' : '🌙 Dark'}
+              {dark ? "☀️ Light" : "🌙 Dark"}
             </button>
           </div>
         </div>
 
-        <div className="mt-6 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+        {/* Live stats */}
+        <div className="mt-6 grid grid-cols-1 md:grid-cols-3 gap-4">
           <div className="rounded-2xl border bg-white/60 dark:bg-neutral-900/60 backdrop-blur p-4">
-            <div className="text-sm font-medium">Birthdate</div>
-            <div className="mt-2 flex gap-2">
-              <input type="date" value={birthInput} onChange={(e) => setBirthInput(e.target.value)} className="w-full rounded-xl border bg-white/70 dark:bg-neutral-900/70 px-3 py-2 outline-none focus:ring-2 focus:ring-black/30 dark:focus:ring-white/30" />
-              <button className="rounded-xl border px-3 py-2 text-sm hover:bg-neutral-100 dark:hover:bg-neutral-800" onClick={applyBirthInput}>Apply</button>
+            <div className="text-sm text-neutral-500 dark:text-neutral-400">Age (years, exact)</div>
+            <div className="mt-1 text-3xl font-semibold leading-tight tabular-nums">{yearsExact.toFixed(8)}</div>
+            <div className="mt-1 text-xs text-neutral-500 dark:text-neutral-400">
+              {fmt2(ageDays)} days • {fmt2(ageHours)} hours
             </div>
-            <div className="mt-2 text-xs text-neutral-500 dark:text-neutral-400">Tip: URL updates to keep your settings.</div>
           </div>
 
           <div className="rounded-2xl border bg-white/60 dark:bg-neutral-900/60 backdrop-blur p-4">
-            <div className="text-sm font-medium">Life Expectancy (years)</div>
-            <div className="mt-2 flex items-center gap-3">
-              <input type="number" min={40} max={120} step={1} value={expectancy} onChange={(e) => setExpectancyVal(Number(e.target.value))} className="w-28 rounded-xl border bg-white/70 dark:bg-neutral-900/70 px-3 py-2 outline-none focus:ring-2 focus:ring-black/30 dark:focus:ring-white/30" />
-              <div className="flex flex-wrap gap-2">
-                {quicks.map((q) => (
-                  <button key={q} onClick={() => setExpectancyVal(q)} className={`rounded-xl border px-3 py-1.5 text-sm hover:bg-neutral-100 dark:hover:bg-neutral-800 ${q===expectancy? 'bg-neutral-100 dark:bg-neutral-800':''}`}>
-                    {q}
-                  </button>
-                ))}
-              </div>
+            <div className="text-sm text-neutral-500 dark:text-neutral-400">Since birth (live)</div>
+            <div className="mt-1 text-xl font-semibold leading-tight tabular-nums">
+              {fmt2(days)}d : {String(hours).padStart(2, "0")}h : {String(minutes).padStart(2, "0")}m :{" "}
+              {String(seconds).padStart(2, "0")}s
             </div>
-            <div className="mt-2 text-xs text-neutral-500 dark:text-neutral-400">Grid uses 52 columns (weeks) per year.</div>
+            <div className="mt-1 text-xs text-neutral-500 dark:text-neutral-400">Updates every second</div>
           </div>
 
-          <div className="rounded-2xl border bg-white/60 dark:bg-neutral-900/60 backdrop-blur p-4 grid grid-cols-2 gap-3">
-            <StatCard label="Age (years)" value={ageYearsExact.toFixed(6)} sub={`${ageYearsInt} full years`} />
-            <StatCard label="Age (days)" value={fmt2(ageDays)} sub={`${fmt2(ageHours)} hours`} />
-            <div className="col-span-2">
-              <div className="flex items-center justify-between mb-2 text-sm">
-                <div>Life progress</div>
-                <div className="tabular-nums">{pctLived.toFixed(2)}%</div>
-              </div>
-              <ProgressBar pct={pctLived} />
-              <div className="mt-2 text-xs text-neutral-500 dark:text-neutral-400">
-                {fmt2(livedWeeks)} weeks lived • {fmt2(remainingWeeks)} weeks left (approx)
-              </div>
+          <div className="rounded-2xl border bg-white/60 dark:bg-neutral-900/60 backdrop-blur p-4">
+            <div className="flex items-center justify-between mb-2 text-sm">
+              <div>Life progress</div>
+              <div className="tabular-nums">{pctLived.toFixed(2)}%</div>
+            </div>
+            <div className="w-full h-3 rounded-full bg-neutral-200 dark:bg-neutral-800 overflow-hidden">
+              <div
+                className="h-full bg-black/80 dark:bg-white/90"
+                style={{ width: `${clamp(pctLived, 0, 100)}%` }}
+                aria-label={`Progress ${pctLived.toFixed(2)}%`}
+              />
+            </div>
+            <div className="mt-2 text-xs text-neutral-500 dark:text-neutral-400">
+              {fmt2(livedWeeks)} weeks lived • {fmt2(remainingWeeks)} weeks left (approx)
             </div>
           </div>
         </div>
 
+        {/* Legend */}
         <div className="mt-6 flex flex-wrap gap-3 text-sm items-center">
-          <div className="flex items-center gap-2"><span className="inline-block h-3 w-3 rounded-sm bg-neutral-900 dark:bg-neutral-100" /> Past</div>
-          <div className="flex items-center gap-2"><span className="inline-block h-3 w-3 rounded-sm bg-neutral-400 dark:bg-neutral-500" /> Current week</div>
-          <div className="flex items-center gap-2"><span className="inline-block h-3 w-3 rounded-sm bg-neutral-200 dark:bg-neutral-800" /> Future</div>
+          <div className="flex items-center gap-2">
+            <span className="inline-block h-3 w-3 rounded-sm bg-neutral-900 dark:bg-neutral-100" /> Past
+          </div>
+          <div className="flex items-center gap-2">
+            <span className="inline-block h-3 w-3 rounded-sm bg-neutral-400 dark:bg-neutral-500" /> Current week
+          </div>
+          <div className="flex items-center gap-2">
+            <span className="inline-block h-3 w-3 rounded-sm bg-neutral-200 dark:bg-neutral-800" /> Future
+          </div>
         </div>
 
-        {/* Grid */}
+        {/* Grid — row per year, decade separators */}
         <div className="mt-4">
           <div className="w-full rounded-2xl border bg-white/60 dark:bg-neutral-900/60 backdrop-blur p-4">
             <div className="flex flex-col">
-              {Array.from({ length: rows }).map((_, r) => {
+              {Array.from({ length: EXPECTANCY_YEARS }).map((_, r) => {
                 const year = years[r];
-                const start = r * cols;
-                const end = start + cols;
+                const start = r * COLS;
+                const end = start + COLS;
                 const rowWeeks = weeksData.slice(start, end);
                 const isDecadeDivider = r > 0 && r % 10 === 0;
 
                 return (
                   <React.Fragment key={r}>
-                    {/* Decade separator (slight visual break) */}
                     {isDecadeDivider && (
                       <div className="my-[6px] h-px bg-neutral-300/60 dark:bg-neutral-700/60" />
                     )}
-
-                    {/* One row: year label + 52 week cells */}
                     <div className="grid grid-cols-[auto,1fr] items-center gap-2">
                       <div className="w-12 text-[10px] text-neutral-500 dark:text-neutral-400 tabular-nums">
                         {year}
                       </div>
-
                       <div
                         className="grid"
                         style={{
-                          // 52 columns; slightly smaller cells for better fit
-                          gridTemplateColumns: `repeat(${cols}, minmax(8px, 1fr))`,
+                          gridTemplateColumns: `repeat(${COLS}, minmax(8px, 1fr))`,
                           columnGap: 6,
                           rowGap: 0,
                         }}
@@ -326,17 +282,23 @@ export default function Page() {
           </div>
         </div>
 
-
+        {/* Footer helper */}
         <div className="mt-6 text-xs text-neutral-500 dark:text-neutral-400 max-w-prose">
-          Weeks are approximated with 52 columns/year. Calculations use local time and average year length (365.2425 days). Hover a square to see its date range. Use the URL params <code>?b=YYYY-MM-DD&e=85</code> to share.
+          Weeks are counted from your birth moment (May 6, 2004, 08:00). Grid uses 52 columns/year. Calculations use
+          local time and average year length (365.2425 days).
         </div>
       </div>
 
+      {/* Floating tooltip layer */}
       {hoverRef.current.show && (
-        <Tooltip x={hoverRef.current.x} y={hoverRef.current.y}>
+        <div
+          className="pointer-events-none fixed z-50 max-w-xs rounded-xl border bg-white dark:bg-neutral-900 text-xs p-2 shadow-lg"
+          style={{ left: hoverRef.current.x + 12, top: hoverRef.current.y + 12 }}
+          role="tooltip"
+        >
           {hoverRef.current.content}
-        </Tooltip>
+        </div>
       )}
     </div>
-  )
+  );
 }
